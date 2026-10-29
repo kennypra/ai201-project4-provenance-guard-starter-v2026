@@ -42,63 +42,69 @@ Two things worth knowing before you pick numbers:
   a **miss**.
 
 ---
-## 1.
+## 1. Clearly-AI and clearly-human text score far apart
 
-<!-- Your criterion. It must name a number. -->
+In each of 3 trials, the combined score for `sample/clearly_ai.json` is at
+least **0.30 higher** than the combined score for `sample/clearly_human.json`,
+and `sample/clearly_human.json` **never** receives the high-confidence AI label
+in any trial.
 
-
-
-**Why this target:**
-
-
-
----
-
-## 2.
-
-<!-- Your criterion. -->
-
-
-
-**Why this target:**
-
-
+**Why this target:** If the two clearest cases the system will ever see land
+close together, there is no room between them for an "unsure" band, and every
+label is close to a coin flip. The second half keeps the expensive mistake in
+view: if plainly human writing can be accused, anyone can.
 
 ---
 
-## 3.
+## 2. Every label is reachable, with no gaps
 
-<!-- Your criterion. -->
+`scoring.label_ranges()` shows the three label ranges covering 0.0–1.0 with no
+gaps and no overlaps. Combined scores of 0.51 and 0.95 produce **different**
+labels. Across 9 fixed inputs (the 3 `sample/` files plus 6 I choose), each of
+the three labels appears **at least 2 times** in every one of 3 trials.
 
-
-
-**Why this target:**
-
-
-
----
-
-## 4.
-
-<!-- Your criterion. -->
-
-
-
-**Why this target:**
-
-
+**Why this target:** A label nothing ever reaches is a decision the system
+can't actually make. A single flip at 0.5 would treat barely-AI and certainly-AI
+text the same.
 
 ---
 
-## 5.
+## 3. Every appeal is recorded and changes status
 
-<!-- Your criterion. -->
+For **5 of 5** appeals sent with a real `content_id` and a reason, `/appeal`
+returns 200, and `GET /log` shows a new entry with `event: "appeal"` and
+`status: "under_review"` that appears *after* the original decision, with the
+original decision entry unchanged. An appeal with a `content_id` that doesn't
+exist returns **404** and writes **no** appeal entry.
 
+**Why this target:** The appeal is the only recourse for a wrongly flagged
+writer. If even one appeal fails silently, that person stays accused with no
+record that they objected.
 
+---
 
-**Why this target:**
+## 4. Malformed submissions are refused, never crash
 
+All 5 of these requests to `/submit` return **400** with
+`"error": "bad_request"`, and **0** return 500: no `text` field, `text: ""`,
+`text: "   "`, `text: 12345`, and a body that isn't JSON. `/ping` still answers
+afterward.
 
+**Why this target:** A crash on malformed input is one of the most common real
+failures. A writing site that sends a bad request should get a clear refusal,
+not a broken service.
+
+---
+
+## 5. Enormous text is rejected, not half-scored
+
+A `/submit` with **100,000 characters** of text returns within **30 seconds**
+with **413** and `"error": "too_large"`, and a rejection entry appears in the
+log. Text up to **20,000 characters** is still accepted.
+
+**Why this target:** The detector only reads the first 400 tokens. Without a
+limit, a huge submission would be judged on a fraction of its text while looking
+like a full verdict, and it can tie up the service for everyone else.
 
 ---
 
