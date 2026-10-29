@@ -200,16 +200,40 @@ def submit():
     a malformed input is one of the most common real failures there is.
     """
     payload = request.get_json(silent=True) or {}
+    text = payload.get("text")
+    creator_id = payload.get("creator_id", "unknown")
 
-    # TODO: delete this and build the route.
+    # step 2 - JSON goes in : pull text and creator_id out of the body
+    # check BEFORE calling the detector, so bad input gets a 400, not a 500
+    if not isinstance(text, str) or not text.strip():
+        return jsonify({"error": "bad_request", "message": "Send JSON with a non-empty \"text\"."}), 400
+
+    # step 3 - one real signal that we first tested from the terminal
+    import detector
+    model_score = detector.model_signal(text)
+
+    # step 4 - log the decision. The content_id is what / appeal needs later
+    content_id = f"c_{uuid.uuid4().hex[:12]}"
+    audit.log_decision(
+        content_id=content_id,
+        creator_id=creator_id,
+        guess="unsure",  # placeholder until Milestone 4/5
+        model_score=model_score,
+        status="undecided",
+    )
+
+    # step 1 -  the route answers. confidence + label still placeholders
     return jsonify({
-        "error": "not_implemented",
-        "message": "POST /submit isn't built yet — see the TODO in app.py.",
-        "you_sent": {
-            "text_length": len(payload.get("text", "")),
-            "creator_id": payload.get("creator_id"),
-        },
-    }), 501
+        "content_id": content_id,
+        "creator_id": creator_id,
+        "guess": "unsure", 
+        "confidence": model_score,
+        "label": "not built yet",
+        "model_score": model_score,
+        "style_score": None,
+    }), 200
+
+    
 
 
 @app.post("/appeal")
