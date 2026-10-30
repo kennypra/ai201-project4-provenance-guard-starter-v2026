@@ -30,6 +30,8 @@ from flask import Flask, jsonify, request
 
 import audit
 import config
+import scoring
+import stylometry
 
 app = Flask(__name__)
 
@@ -212,25 +214,32 @@ def submit():
     import detector
     model_score = detector.model_signal(text)
 
-    # step 4 - log the decision. The content_id is what / appeal needs later
+    # step 5 + 6 - second signal, then combine the two into one score
+    style_score = stylometry.style_signal(text)
+    combined_score = scoring.combine_signals(model_score, style_score)
+
+    # step 4 + 7 - log the decision with BOTH signals and the combined score.
+    # The content_id is what /appeal needs later
     content_id = f"c_{uuid.uuid4().hex[:12]}"
     audit.log_decision(
         content_id=content_id,
         creator_id=creator_id,
-        guess="unsure",  # placeholder until Milestone 4/5
+        guess="unsure",  # placeholder until Milestone 5
         model_score=model_score,
+        style_score=style_score,
+        combined_score=combined_score,
         status="decided",  # audit.py: "decided" now, "under_review" after an appeal
     )
 
-    # step 1 -  the route answers. confidence + label still placeholders
+    # the route answers. confidence is the combined score; label is Milestone 5
     return jsonify({
         "content_id": content_id,
         "creator_id": creator_id,
-        "guess": "unsure", 
-        "confidence": model_score,
+        "guess": "unsure",
+        "confidence": combined_score,
         "label": "not built yet",
         "model_score": model_score,
-        "style_score": None,
+        "style_score": style_score,
     }), 200
 
     

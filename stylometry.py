@@ -33,6 +33,8 @@ anything together:
 import re
 import statistics
 
+import config
+
 
 def sentences(text: str) -> list[str]:
     """Split into sentences. Rough and good enough — given to you."""
@@ -63,9 +65,17 @@ def sentence_length_spread(text: str) -> float:
     Watch the edge case: a one-sentence submission has no spread at all, and
     `stdev` raises on fewer than two values. Decide what that should return
     before the attack set decides for you.
+
+    Built: coefficient of variation — stdev of words-per-sentence divided by
+    the mean. 0.0 means every sentence is the same length; higher means more
+    varied, which is the more human direction. Fewer than two sentences has no
+    spread to measure, so it returns 0.0.
     """
-    # TODO: replace this
-    return 0.0
+    lengths = [len(words(s)) for s in sentences(text)]
+    lengths = [n for n in lengths if n > 0]
+    if len(lengths) < 2:
+        return 0.0
+    return statistics.stdev(lengths) / statistics.mean(lengths)
 
 
 def type_token_ratio(text: str) -> float:
@@ -79,9 +89,14 @@ def type_token_ratio(text: str) -> float:
     longer, because common words repeat. Two texts of different lengths aren't
     directly comparable on it, and if your test inputs vary a lot in length,
     that alone can look like a signal.
+
+    Built: unique words / total words over the whole text. No words returns
+    0.0. Length still affects it — see above.
     """
-    # TODO: replace this
-    return 0.0
+    tokens = words(text)
+    if not tokens:
+        return 0.0
+    return len(set(tokens)) / len(tokens)
 
 
 def punctuation_density(text: str) -> float:
@@ -93,9 +108,16 @@ def punctuation_density(text: str) -> float:
         semicolons, dashes — is a real choice. Semicolons and em dashes are
         more interesting than full stops, because they vary more between
         writers.
+
+    Built: mid-sentence punctuation only — commas, semicolons, colons, dashes
+    (-, –, —), parentheses, quotes — per word. Full stops, ? and ! are left
+    out because every sentence has one. Higher means more punctuation.
     """
-    # TODO: replace this
-    return 0.0
+    tokens = words(text)
+    if not tokens:
+        return 0.0
+    marks = re.findall(r"[,;:\-–—()\"“”]", text)
+    return len(marks) / len(tokens)
 
 
 # ── Combining them ───────────────────────────────────────────────────────────
@@ -121,9 +143,21 @@ def style_signal(text: str) -> float:
     clearly human, plain conventional human writing, lightly-edited AI — before
     you trust it. Plain and ordinary, not formal: formal prose reads as *human*
     to signal one, and it is plain writing that gets accused.
+
+    Built: spread and punctuation are each put on 0–1 between the anchors in
+    config.py (flipped, since low spread / little punctuation is the AI
+    direction), then weighted. type_token_ratio is not scored — see config.py.
     """
-    # TODO: replace this
-    return 0.5
+    spread = _scale(sentence_length_spread(text), config.SPREAD_AI, config.SPREAD_HUMAN)
+    punct = _scale(punctuation_density(text), config.PUNCT_AI, config.PUNCT_HUMAN)
+    score = config.WEIGHT_SPREAD * spread + config.WEIGHT_PUNCT * punct
+    return round(score, 4)
+
+
+def _scale(value: float, ai_anchor: float, human_anchor: float) -> float:
+    """1.0 at the AI anchor, 0.0 at the human anchor, a straight line between, clipped."""
+    position = (value - human_anchor) / (ai_anchor - human_anchor)
+    return min(1.0, max(0.0, position))
 
 
 if __name__ == "__main__":

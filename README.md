@@ -72,9 +72,25 @@
 <!-- Write the rule in words, then give the numbers. What happens when the two
      signals disagree? -->
 
-**The rule:**
+**The rule:** Average the two signals equally. If they disagree by more than
+0.4, the combined score is capped at 0.5 — one signal on its own is never
+enough to call someone's writing AI.
 
-**The numbers:**
+**The numbers:** (all in `config.py`)
+
+- Combining: `WEIGHT_MODEL_SIGNAL = 0.5`, `WEIGHT_STYLE_SIGNAL = 0.5`,
+  `DISAGREEMENT_GAP = 0.4`, `DISAGREEMENT_CAP = 0.5`
+- Style signal (`stylometry.py::style_signal`): two measures, each put on 0–1
+  with a straight line between an AI anchor and a human anchor, clipped at the
+  ends, then weighted:
+  - sentence length spread (stdev ÷ mean of words per sentence): 0.2 → 1.0
+    (AI), 1.0 → 0.0 (human); weight `WEIGHT_SPREAD = 0.6`
+  - punctuation density (commas, semicolons, colons, dashes, parentheses and
+    quotes per word): 0.02 → 1.0 (AI), 0.12 → 0.0 (human); weight
+    `WEIGHT_PUNCT = 0.4`
+  - type-token ratio is measured but not scored: it shrinks with text length,
+    and on the samples it pointed the wrong way (the AI sample had the most
+    varied vocabulary).
 
 **Where it lives:** `scoring.py::combine_signals`
 
@@ -83,6 +99,18 @@
 
 **A case where my two signals split, and what my rule does with it:**
 
+`sample/clearly_human.json`: model signal 0.445 (close to a coin flip — the
+vocabulary is ordinary), style signal 0.012 (sentence lengths vary wildly,
+lots of dashes and commas). The gap is 0.43, so the cap applies, but the
+average is already 0.228 — under the cap — so the cap changes nothing here and
+the text lands in high-confidence human. The cap only bites when the average of
+a split is above 0.5, which none of my calibration inputs reached.
+
+**A case where both signals are wrong together:** a plainly written human
+paragraph (short sentences, simple words, no commas) scored 0.823 on the model
+signal and 0.822 on style — combined 0.822, the most "AI" of all five
+calibration inputs. Both signals reward the same thing: plain, even writing.
+Combining them can't fix a blind spot they share. Left as a known failure.
 
 
 ---

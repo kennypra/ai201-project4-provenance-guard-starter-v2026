@@ -57,6 +57,33 @@ DETECTOR_MAX_TOKENS = 400
 WEIGHT_MODEL_SIGNAL = 0.5
 WEIGHT_STYLE_SIGNAL = 0.5
 
+# When the two signals disagree by more than this, neither one gets to decide
+# alone: the combined score is capped at DISAGREEMENT_CAP, so a split can
+# never produce the high-confidence AI label.
+DISAGREEMENT_GAP = 0.4
+DISAGREEMENT_CAP = 0.5
+
+
+# ─── Style signal (Milestone 4) ──────────────────────────────────────────────
+# Each raw measure is mapped onto 0–1 (higher = more likely AI) with a straight
+# line between two anchor points, clipped at the ends.
+#
+#   value at or past the AI anchor     -> 1.0
+#   value at or past the human anchor  -> 0.0
+#
+# type_token_ratio is measured but NOT scored: it shrinks as text gets longer,
+# and on the sample texts it pointed the wrong way (the AI sample had the most
+# varied vocabulary).
+
+SPREAD_AI = 0.2       # sentences nearly all the same length
+SPREAD_HUMAN = 1.0    # sentence length varies as much as its average
+
+PUNCT_AI = 0.02       # about one mid-sentence mark every 50 words
+PUNCT_HUMAN = 0.12    # about one every 8 words
+
+WEIGHT_SPREAD = 0.6
+WEIGHT_PUNCT = 0.4
+
 
 # ─── Thresholds (Milestone 5) ────────────────────────────────────────────────
 # Where one label becomes another. Scores run 0.0 (confidently human) to 1.0

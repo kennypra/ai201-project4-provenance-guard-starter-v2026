@@ -51,12 +51,18 @@ def combine_signals(model_score: float, style_score: float) -> float:
 
     The weights in config.py are placeholders. Change them, or ignore them and
     write a different rule.
+
+    Built — the rule in words: average the two signals. If they disagree by
+    more than DISAGREEMENT_GAP, cap the result at DISAGREEMENT_CAP, because one
+    signal on its own is never enough to call a writer's work AI.
     """
-    # TODO: replace this
-    return (
+    combined = (
         config.WEIGHT_MODEL_SIGNAL * model_score
         + config.WEIGHT_STYLE_SIGNAL * style_score
     )
+    if abs(model_score - style_score) > config.DISAGREEMENT_GAP:
+        combined = min(combined, config.DISAGREEMENT_CAP)
+    return round(combined, 4)
 
 
 def score_to_label(score: float) -> tuple[str, str]:

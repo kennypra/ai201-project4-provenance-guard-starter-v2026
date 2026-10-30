@@ -3,3 +3,4 @@
 {"timestamp": "2026-10-29T01:25:29+00:00", "content_id": "c_b15385e269c1", "creator_id": "demo_instructor", "guess": "unsure", "model_score": 0.3489, "style_score": null, "combined_score": null, "label": null, "status": "undecided"}
 {"timestamp": "2026-10-29T01:25:51+00:00", "content_id": "c_437316d6d997", "creator_id": "demo_instructor", "guess": "unsure", "model_score": 0.4445, "style_score": null, "combined_score": null, "label": null, "status": "undecided"}
 {"timestamp": "2026-10-29T02:56:49+00:00", "content_id": "c_bf7ab97ae95c", "creator_id": "demo_instructor", "guess": "unsure", "model_score": 0.7544, "style_score": null, "combined_score": null, "label": null, "status": "decided"}
+{"timestamp": "2026-10-30T04:43:47+00:00", "content_id": "c_c92d23ecd1c7", "creator_id": "demo_instructor", "guess": "unsure", "model_score": 0.4445, "style_score": 0.0119, "combined_score": 0.2282, "label": null, "status": "decided"}
