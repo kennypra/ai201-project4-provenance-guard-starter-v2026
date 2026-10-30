@@ -219,7 +219,7 @@ def submit():
         creator_id=creator_id,
         guess="unsure",  # placeholder until Milestone 4/5
         model_score=model_score,
-        status="undecided",
+        status="decided",  # audit.py: "decided" now, "under_review" after an appeal
     )
 
     # step 1 -  the route answers. confidence + label still placeholders

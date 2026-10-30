@@ -121,14 +121,25 @@
      two off the response, so leaving them out costs you next unit's
      diagnostics. -->
 
+<!-- Milestone 3 run: one signal only. confidence is a placeholder equal to
+     model_score; guess and label are placeholders until Milestones 4 and 5. -->
+
 ```bash
 $ curl -X POST http://127.0.0.1:5000/submit \
   -H "Content-Type: application/json" \
-  -d '{"text": "...", "creator_id": "..."}'
+  -d @sample/clearly_ai.json
 ```
 
 ```json
-
+{
+  "confidence": 0.7544,
+  "content_id": "c_bf7ab97ae95c",
+  "creator_id": "demo_instructor",
+  "guess": "unsure",
+  "label": "not built yet",
+  "model_score": 0.7544,
+  "style_score": null
+}
 ```
 
 **An appeal**
@@ -146,11 +157,29 @@ $ curl -X POST http://127.0.0.1:5000/appeal \
 **What the log shows afterwards**
 
 ```bash
-$ curl "http://127.0.0.1:5000/log?limit=3"
+$ curl "http://127.0.0.1:5000/log?limit=1"
 ```
 
-```json
+<!-- Milestone 3: the submission's log entry only. Re-run with limit=3 after
+     the appeal is built (Milestone 5). -->
 
+```json
+{
+  "count": 1,
+  "entries": [
+    {
+      "combined_score": null,
+      "content_id": "c_bf7ab97ae95c",
+      "creator_id": "demo_instructor",
+      "guess": "unsure",
+      "label": null,
+      "model_score": 0.7544,
+      "status": "decided",
+      "style_score": null,
+      "timestamp": "2026-10-29T02:56:49+00:00"
+    }
+  ]
+}
 ```
 
 ---
