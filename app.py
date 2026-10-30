@@ -218,26 +218,30 @@ def submit():
     style_score = stylometry.style_signal(text)
     combined_score = scoring.combine_signals(model_score, style_score)
 
+    # step 8 - turn the score into a guess and the sentence a reader sees
+    guess, label = scoring.score_to_label(combined_score)
+
     # step 4 + 7 - log the decision with BOTH signals and the combined score.
     # The content_id is what /appeal needs later
     content_id = f"c_{uuid.uuid4().hex[:12]}"
     audit.log_decision(
         content_id=content_id,
         creator_id=creator_id,
-        guess="unsure",  # placeholder until Milestone 5
+        guess=guess,
         model_score=model_score,
         style_score=style_score,
         combined_score=combined_score,
+        label=label,
         status="decided",  # audit.py: "decided" now, "under_review" after an appeal
     )
 
-    # the route answers. confidence is the combined score; label is Milestone 5
+    # the route answers. confidence is the combined score
     return jsonify({
         "content_id": content_id,
         "creator_id": creator_id,
-        "guess": "unsure",
+        "guess": guess,
         "confidence": combined_score,
-        "label": "not built yet",
+        "label": label,
         "model_score": model_score,
         "style_score": style_score,
     }), 200
@@ -266,13 +270,36 @@ def appeal():
     wrong accusation and nothing at all.
     """
     payload = request.get_json(silent=True) or {}
+    content_id = payload.get("content_id")
+    reasoning = payload.get("reasoning")
 
-    # TODO: delete this and build the route.
+    # both fields are required, same shape as /submit's bad-input answer
+    if not isinstance(content_id, str) or not content_id.strip():
+        return jsonify({"error": "bad_request", "message": "Send JSON with a non-empty \"content_id\"."}), 400
+    if not isinstance(reasoning, str) or not reasoning.strip():
+        return jsonify({"error": "bad_request", "message": "Send JSON with a non-empty \"reasoning\"."}), 400
+
+    # step 1 - the content_id has to exist. An unknown id writes nothing
+    entries = audit.entries_for(content_id)
+    if not entries:
+        return jsonify({"error": "not_found", "message": f"No submission with content_id \"{content_id}\"."}), 404
+
+    # step 2 - record the appeal next to the original decision (append-only,
+    # the decision itself is left as it was). The creator comes from that decision
+    decision = next((e for e in entries if "event" not in e), entries[0])
+    audit.log_appeal(
+        content_id=content_id,
+        creator_id=decision.get("creator_id", "unknown"),
+        reasoning=reasoning,
+    )
+
+    # step 3 - confirm to the writer. No automatic re-check
     return jsonify({
-        "error": "not_implemented",
-        "message": "POST /appeal isn't built yet — see the TODO in app.py.",
-        "you_sent": payload,
-    }), 501
+        "content_id": content_id,
+        "status": "under_review",
+        "message": "Thanks. Your appeal has been recorded and a person will review this decision.",
+        "original_guess": decision.get("guess"),
+    }), 200
 
 
 # ── Already works ─────────────────────────────────────────────────────────────

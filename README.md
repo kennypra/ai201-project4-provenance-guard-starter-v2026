@@ -124,15 +124,26 @@ Combining them can't fix a blind spot they share. Left as a known failure.
 
 | Label | Score range | The exact text a reader sees |
 |---|---|---|
-| high-confidence human |  |  |
-| unsure |  |  |
-| high-confidence AI |  |  |
+| high-confidence human | 0.00 – 0.35 (0.35 itself counts as human) | We think a person wrote this. Nothing in the writing looked like it came from an AI tool. |
+| unsure | above 0.35, below 0.65 | We can't tell whether a person or an AI tool wrote this. That isn't an accusation: lots of people's writing lands here. If you wrote it yourself, you can tell us, and a person will take a look. |
+| high-confidence AI | 0.65 – 1.00 (0.65 itself counts as AI) | This reads a lot like writing produced by an AI tool. Our check can be wrong, especially about plain, simple writing. If you wrote this yourself, you can appeal and a person will review it. |
+
+Ranges come from `scoring.label_ranges()` and the thresholds in `config.py`
+(`HUMAN_THRESHOLD = 0.35`, `AI_THRESHOLD = 0.65`). Each label was reached by a
+real submission: `sample/clearly_human.json` → human (0.228),
+`sample/borderline.json` → unsure (0.436), `sample/clearly_ai.json` → AI
+(0.729).
 
 **Why I worded the "unsure" one this way:**
 <!-- It's the hardest of the three. It has to admit uncertainty without
      sounding like an accusation, because the person reading it may well have
      written every word themselves. -->
 
+It says outright that it isn't an accusation, and that landing here is common,
+because the person reading it most likely wrote every word. It ends on what
+they can do rather than on the doubt. The AI label also admits it can be wrong
+and names plain writing specifically, because that is the writing my own
+calibration run wrongly scored as AI.
 
 
 ---
@@ -149,24 +160,24 @@ Combining them can't fix a blind spot they share. Left as a known failure.
      two off the response, so leaving them out costs you next unit's
      diagnostics. -->
 
-<!-- Milestone 3 run: one signal only. confidence is a placeholder equal to
-     model_score; guess and label are placeholders until Milestones 4 and 5. -->
+A plainly written human paragraph — the false positive from my calibration
+run — getting the high-confidence AI label, then appealed.
 
 ```bash
 $ curl -X POST http://127.0.0.1:5000/submit \
   -H "Content-Type: application/json" \
-  -d @sample/clearly_ai.json
+  -d '{"text": "My job is at a store. I work there five days a week. I like my boss. She is kind to me. The work is not hard but my feet hurt at the end of the day. I take the bus home. The bus is late most days. When I get home I cook dinner for my sister. Then I study English for one hour. I want to get a better job next year.", "creator_id": "plain_writer"}'
 ```
 
 ```json
 {
-  "confidence": 0.7544,
-  "content_id": "c_bf7ab97ae95c",
-  "creator_id": "demo_instructor",
-  "guess": "unsure",
-  "label": "not built yet",
-  "model_score": 0.7544,
-  "style_score": null
+  "confidence": 0.8223,
+  "content_id": "c_b41eb44ab560",
+  "creator_id": "plain_writer",
+  "guess": "ai",
+  "label": "This reads a lot like writing produced by an AI tool. Our check can be wrong, especially about plain, simple writing. If you wrote this yourself, you can appeal and a person will review it.",
+  "model_score": 0.8229,
+  "style_score": 0.8218
 }
 ```
 
@@ -175,40 +186,55 @@ $ curl -X POST http://127.0.0.1:5000/submit \
 ```bash
 $ curl -X POST http://127.0.0.1:5000/appeal \
   -H "Content-Type: application/json" \
-  -d '{"content_id": "...", "reasoning": "..."}'
+  -d '{"content_id": "c_b41eb44ab560", "reasoning": "I wrote this myself. English is my second language, so I keep my sentences short and simple on purpose."}'
 ```
 
 ```json
-
+{
+  "content_id": "c_b41eb44ab560",
+  "message": "Thanks. Your appeal has been recorded and a person will review this decision.",
+  "original_guess": "ai",
+  "status": "under_review"
+}
 ```
 
 **What the log shows afterwards**
 
 ```bash
-$ curl "http://127.0.0.1:5000/log?limit=1"
+$ curl "http://127.0.0.1:5000/log?limit=2"
 ```
-
-<!-- Milestone 3: the submission's log entry only. Re-run with limit=3 after
-     the appeal is built (Milestone 5). -->
 
 ```json
 {
-  "count": 1,
+  "count": 2,
   "entries": [
     {
-      "combined_score": null,
-      "content_id": "c_bf7ab97ae95c",
-      "creator_id": "demo_instructor",
-      "guess": "unsure",
-      "label": null,
-      "model_score": 0.7544,
+      "combined_score": 0.8223,
+      "content_id": "c_b41eb44ab560",
+      "creator_id": "plain_writer",
+      "guess": "ai",
+      "label": "This reads a lot like writing produced by an AI tool. Our check can be wrong, especially about plain, simple writing. If you wrote this yourself, you can appeal and a person will review it.",
+      "model_score": 0.8229,
       "status": "decided",
-      "style_score": null,
-      "timestamp": "2026-10-29T02:56:49+00:00"
+      "style_score": 0.8218,
+      "timestamp": "2026-10-30T20:50:58+00:00"
+    },
+    {
+      "content_id": "c_b41eb44ab560",
+      "creator_id": "plain_writer",
+      "event": "appeal",
+      "reasoning": "I wrote this myself. English is my second language, so I keep my sentences short and simple on purpose.",
+      "status": "under_review",
+      "timestamp": "2026-10-30T20:50:58+00:00"
     }
   ]
 }
 ```
+
+The original decision is left exactly as it was; the appeal is a new entry
+after it. An appeal for a `content_id` that doesn't exist returns `404
+not_found` and writes nothing; one with no `reasoning` returns `400
+bad_request`.
 
 ---
 
