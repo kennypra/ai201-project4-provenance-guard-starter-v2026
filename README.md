@@ -39,6 +39,31 @@
 <!-- The path a submission takes, from arriving to the label a reader sees.
      Six or seven steps — this is the trace you wrote in Milestone 1. -->
 
+A writing site sends a piece of text; the service answers with a guess, a
+score, a sentence the writer can read, and an ID they can appeal with.
+
+1. **The request arrives** at `POST /submit` (`app.py::submit`) as JSON with
+   `text` and `creator_id`. A missing, empty, whitespace-only or non-string
+   `text`, or a body that isn't JSON, is refused here with `400 bad_request`
+   before any scoring runs. A missing `creator_id` becomes `"unknown"`.
+2. **Signal one** (`detector.py::model_signal`) runs gpt2 locally on the first
+   400 tokens and turns how predictable the text is into a 0–1 `model_score`.
+3. **Signal two** (`stylometry.py::style_signal`) measures the text's shape —
+   how much sentence length varies and how much mid-sentence punctuation it
+   uses — and turns that into a 0–1 `style_score`.
+4. **The combining rule** (`scoring.py::combine_signals`) averages the two into
+   one `combined_score`, capped at 0.5 when they disagree by more than 0.4.
+5. **The label mapping** (`scoring.py::score_to_label`) turns that score into a
+   `guess` (`human` / `unsure` / `ai`) and the full sentence a reader sees.
+6. **The decision is logged** (`audit.py::log_decision`) to
+   `logs/audit.jsonl` under a new `content_id` (`c_` + 12 hex characters),
+   with both signal scores, the combined score, guess, label and
+   `status: "decided"`.
+7. **The response goes back** with `content_id`, `guess`, `confidence` (the
+   combined score), `label`, `model_score` and `style_score`. If the writer
+   disagrees, they send that `content_id` and their reasoning to `POST /appeal`,
+   which adds an `under_review` entry beside the original decision.
+
 
 
 ---
@@ -53,19 +78,46 @@
 
 ### Signal one — the model signal
 
-**What it measures:**
+**What it measures:** How predictable the text is to a language model (gpt2,
+run locally). It computes perplexity — how surprised the model is by each next
+word — over the first 400 tokens and squashes it onto 0–1, where low
+perplexity (predictable) means a higher, more AI-like score.
 
-**Why that might differ between human and AI writing:**
+**Why that might differ between human and AI writing:** A language model
+writes by repeatedly picking a likely next word, so its output is text a model
+finds easy to predict. People make odder word choices, take abrupt turns and
+reach for the specific over the typical, which a model doesn't see coming.
 
-**What it can't see:**
+**What it can't see:** Who actually wrote it. Predictability isn't authorship —
+the signal rewards common words in short, ordinary sentences, and plenty of
+people write that way: second-language writers, younger writers, anyone
+writing plainly on purpose. My plain-writing paragraph scored 0.823 on this
+signal, higher than the actual AI sample (0.754). It also misses the reverse:
+ornate prose full of rare words scores as human whoever wrote it, and anything
+after the first 400 tokens is never read.
 
 ### Signal two — the style signal
 
-**What it measures:**
+**What it measures:** The shape of the text, without reading a word of it. Two
+measures are scored: how much sentence length varies (standard deviation of
+words per sentence ÷ the mean) and mid-sentence punctuation per word (commas,
+semicolons, colons, dashes, parentheses, quotes). A third, type-token ratio
+(unique words ÷ total words), is computed but not scored. Low variation and
+little punctuation push the score toward AI.
 
-**Why that might differ between human and AI writing:**
+**Why that might differ between human and AI writing:** Generated prose tends
+toward even, mid-length sentences and tidy punctuation, because "most likely
+next word" averages out the extremes. Human writing is lumpier — a three-word
+sentence next to a forty-word one, dashes and asides. On the samples, the human
+text's spread was 1.13 against the AI text's 0.41.
 
-**What it can't see:**
+**What it can't see:** Meaning. Anything that changes the shape without
+changing the substance moves it — breaking sentences up, adding dashes or
+commas, pasting in a quotation — which is cheap to do on purpose to AI text. It
+also shares signal one's blind spot from the other side: plain writing has even
+sentences and few commas, so my plain-writing paragraph scored 0.822 here too.
+The two signals measure different properties but agree on the same wrong
+answer for that writer.
 
 ### The combining rule
 
@@ -240,17 +292,37 @@ bad_request`.
 
 ## How I Used AI
 
-**Moment 1**
+I used Claude Code (Claude Opus) throughout this unit, inside VS Code, with
+access to the repo.
 
-- *What I asked for:*
-- *What came back:*
-- *What I changed:*
+**Moment 1 — getting `/submit` to work (Milestone 3)**
 
-**Moment 2**
+- *What I asked for:* What wasn't working in my first version of `/submit`,
+  and then help getting it right.
+- *What came back:* It pointed out a missing comma (a syntax error that took
+  the whole service down, `/ping` included), `uuid4().hec` instead of `.hex`,
+  and a slice of `[::12]` that gave about 3 characters instead of 12. It also
+  caught that I called the detector *before* checking the input, so a missing
+  `text` would crash with a 500 instead of returning my 400, and that the
+  response still sent back `"content_id": "hardcoded"`, so a writer would have
+  nothing to appeal with.
+- *What I changed:* I fixed the comma and the `.hex` typo myself; Claude
+  reordered the validation, fixed the slice and returned the real ID. Then it
+  ran curl against missing and blank text to show both now return 400.
 
-- *What I asked for:*
-- *What came back:*
-- *What I changed:*
+**Moment 2 — getting `test.py` to pass (setup)**
+
+- *What I asked for:* Help passing `python test.py` before the first class.
+- *What came back:* Two failures with one cause. My `.venv` had been built
+  from Anaconda's Python 3.9, which was first on my PATH, so
+  `python3 -m venv` picked it up. The course needs 3.11+, and the same old
+  Python is why `app.py` wouldn't import: its `str | None` type hints only work
+  from 3.10. Claude found Python 3.12 already on my Mac, rebuilt `.venv` with
+  `python3.12 -m venv`, reinstalled `requirements.txt` and downloaded the
+  detector model. `test.py` went to 9 passed, 0 failed.
+- *What I changed:* No starter code. The fix was the environment. I learned
+  that `python3` on my machine means Anaconda's 3.9, so I activate `.venv`
+  before running anything and check `python --version` says 3.12.
 
 <!-- ═══════════════════════ UNIT 8 — THE TEST ═══════════════════════ -->
 
