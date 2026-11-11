@@ -570,11 +570,48 @@ the same score for the same text, so there was no trial-to-trial instability.
 
 | Criterion | Target | Run 1 | Run 2 | Run 3 | Verdict |
 |---|---|---|---|---|---|
-| 1. Score spread | clearly_ai ≥ 0.30 above clearly_human every trial; clearly_human never AI | 0.7286 vs 0.2282 (gap 0.5004); human | 0.7286 vs 0.2282 (gap 0.5004); human | 0.7286 vs 0.2282 (gap 0.5004); human |  |
-| 2. Label coverage | no gaps; 0.51 ≠ 0.95; each label ≥ 2 of 9, every trial | ai 5 · human 2 · unsure 2; ranges 0–0.35 / 0.35–0.65 / 0.65–1; 0.51 unsure, 0.95 ai | same | same |  |
-| 3. Appeal path | 5/5 appeals 200 + `under_review` entry after decision, decision unchanged; unknown id → 404, no appeal entry | 5/5 200, all after decision, decision still `decided`; unknown 404, 0 appeal entries | same | same |  |
-| 4. Bad input | 5 malformed requests all 400 `bad_request`, 0 × 500, `/ping` still up | 5/5 400 (non-JSON body: `bad_request`); `/ping` 200 | same | same |  |
-| 5. Enormous text | 100,000 chars → 413 `too_large` within 30 s + rejection logged; 20,000 accepted | 100k: **200, ai 0.9986**, 0.32 s, logged as a decision; 20k: 200 | 100k: **200**, 0.29 s; 20k: 200 | 100k: **200**, 0.35 s; 20k: 200 |  |
+| 1. Score spread | clearly_ai ≥ 0.30 above clearly_human every trial; clearly_human never AI | 0.7286 vs 0.2282 (gap 0.5004); human | 0.7286 vs 0.2282 (gap 0.5004); human | 0.7286 vs 0.2282 (gap 0.5004); human | **MET** |
+| 2. Label coverage | no gaps; 0.51 ≠ 0.95; each label ≥ 2 of 9, every trial | ai 5 · human 2 · unsure 2; ranges 0–0.35 / 0.35–0.65 / 0.65–1; 0.51 unsure, 0.95 ai | same | same | **MET** |
+| 3. Appeal path | 5/5 appeals 200 + `under_review` entry after decision, decision unchanged; unknown id → 404, no appeal entry | 5/5 200, all after decision, decision still `decided`; unknown 404, 0 appeal entries | same | same | **MET** |
+| 4. Bad input | 5 malformed requests all 400 `bad_request`, 0 × 500, `/ping` still up | 5/5 400 (non-JSON body: `bad_request`); `/ping` 200 | same | same | **MET** |
+| 5. Enormous text | 100,000 chars → 413 `too_large` within 30 s + rejection logged; 20,000 accepted | 100k: **200, ai 0.9986**, 0.32 s, logged as a decision; 20k: 200 | 100k: **200**, 0.29 s; 20k: 200 | 100k: **200**, 0.35 s; 20k: 200 | **MISSED** |
+
+**How each verdict was decided.** A target had to hold in every trial; one
+miss in any trial would make it MISSED.
+
+1. **MET.** The gap was 0.5004 in all three trials, which is over 0.30, and
+   clearly_human got the human label each time. This is weak evidence, though:
+   it's the same two texts, the scores never vary, and the attack set's
+   false_positive family shows plainer human writing gets accused — this
+   criterion only tests one easy human text.
+2. **MET.** In every trial the AI label appeared 5 times, human 2 and unsure
+   2. `label_ranges()` covers 0–1 with nothing missing; the printed ranges
+   share the 0.35 and 0.65 endpoints, but the code gives each endpoint to
+   exactly one label (`<=` human, `>=` ai), so nothing overlaps in behavior.
+   0.51 gives unsure and 0.95 gives ai. Human and unsure hit the minimum of 2
+   exactly, with no margin.
+3. **MET.** In all three trials, 5 of 5 appeals returned 200 and wrote an
+   `under_review` entry after their decision, and every decision entry still
+   read `decided`. The unknown id returned 404 and wrote 0 appeal entries. It
+   does write a `rejected` entry, which the criterion doesn't forbid.
+4. **MET.** In all three trials, all five requests returned 400 and none
+   returned 500, and `/ping` answered afterwards. The non-JSON body's response
+   says `"error": "bad_request"`. For the four JSON cases, `run_eval.py`
+   doesn't record the error field, so I checked the audit log: each one has
+   three `rejected` / `bad_request` entries, and `bad_request` is the only
+   400 that `/submit` returns. The criterion is MET as written, but too
+   narrow: the attack set crashed the route with two malformed inputs it
+   didn't include (MF02, a single character; RQ07, a JSON array body).
+5. **MISSED.** Two of its three parts held in every trial: the response came
+   back within 30 seconds (0.29–0.35 s), and 20,000 characters were accepted.
+   But 100,000 characters got **200** with an AI label (0.9986), not 413
+   `too_large`, and the log has a decision for it, not a rejection. Nothing in
+   `/submit` checks length, so this was never going to pass. The 413 check is
+   a design decision I wrote into the criterion in unit 7 and didn't build.
+
+**Criterion revisions:** none. All five could be measured as written, so
+nothing in `criteria.md` changes. Criterion 5 is missed, not broken, so its
+target stays where it is.
 
 **Real output from one trial** (trial 1 of each). The JSON is as the tools
 wrote it, except that `label` is removed and `sent` is shortened to keep it
