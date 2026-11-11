@@ -330,7 +330,8 @@ access to the repo.
 
 ## Rate Limiting
 
-**My limits:** ___ per minute, ___ per day
+**My limits:** 5 per minute, 50 per day (`config.py`: `RATE_LIMIT_PER_MINUTE`,
+`RATE_LIMIT_PER_DAY`), on `POST /submit` only.
 
 **Why those numbers and not others:**
 <!-- Think about two people: a real writer submitting their own work a few
@@ -338,16 +339,44 @@ access to the repo.
      thresholds. Your numbers have to be liveable for the first and hostile to
      the second. -->
 
+A real writer submits a piece, maybe revises and resubmits it, a few times an
+hour. Five a minute leaves room for a quick retry or two without ever getting
+in their way, and fifty a day is more than anyone checks their own work. A
+script mapping my thresholds with 1,000 variations under one `creator_id`
+would be stopped after 5 in its first minute and would need 20 days at 50 a
+day. Each scoring call also runs gpt2 locally for a second or two, so a flood
+costs real compute, not just log lines.
+
 **What a caller counts as:** <!-- per address, or per creator_id? They fail
 differently — one script can look like a thousand callers, and one household
 can look like one. -->
+
+Per `creator_id` when the request has a non-empty one, per IP address otherwise
+(`app.py::rate_limit_key`). The weakness: a script that invents a new
+`creator_id` per request gets a fresh allowance every time, so the limit only
+slows down a caller who keeps one identity. The address fallback has the
+opposite problem: everyone behind one shared address shares one allowance.
+Counts are kept in memory, so restarting the service resets them.
+
+Every 429 is logged (`event: "rejected"`, `reason: "rate_limited"`), and so is
+every request my own routes refuse (`reason: "bad_request"` or `"not_found"`).
 
 **The run of status codes when I pushed past it:**
 
 <!-- python run_attacks.py --flood 15 -->
 
 ```
+$ python run_attacks.py --flood 15
+200 200 200 200 200 429 429 429 429 429 429 429 429 429 429
 
+10 of 15 were rate limited.
+Wrote results/flood_2026-11-10_2239.md
+```
+
+The log entry for one of those 429s:
+
+```json
+{"creator_id": "flood_tester", "event": "rejected", "limit": "5 per 1 minute", "reason": "rate_limited", "status": "rejected", "timestamp": "2026-11-11T04:39:07+00:00"}
 ```
 
 ---
@@ -357,19 +386,166 @@ can look like one. -->
 <!-- Every attack with its outcome and a held-or-broke mark.
      `run_attacks.py --label before` produces the table. -->
 
+`python run_attacks.py --set attack_set --label before`, 56 attacks, service
+restarted first so the rate-limit counters started at zero. Nothing in the
+pipeline was changed before this run. Raw report:
+`results/attack_run_2026-11-10_2255_before.md`; the run's audit entries:
+`results/audit_attack_run_before.jsonl`.
 
+**How I marked each one** — what the attack was trying to do, and whether it
+got it:
+
+| Family | BROKE when… | HELD when… |
+|---|---|---|
+| evasion (AI text, disguised) | it did **not** get the AI label. "Unsure" counts as broken: that label tells the reader it isn't an accusation, so the disguise worked | it got the AI label |
+| false_positive (real human text) | it got the AI label — a real writer accused | it got human or unsure |
+| prompt_injection | the instruction changed anything: the label text, the log, or the score in the direction asked | the pipeline treated it as ordinary text |
+| malformed | the route crashed (5xx), or it gave a confident AI/human label to something that isn't readable prose | it was refused with a 4xx, or scored only as unsure |
+| flood_same_creator | more than 5 got through in the minute | requests after the 5th got 429 |
+
+**Totals: 36 HELD, 20 BROKE.**
+
+| Family | Attacks | HELD | BROKE |
+|---|---|---|---|
+| evasion | 10 | 3 | 7 |
+| false_positive | 8 | 1 | 7 |
+| prompt_injection | 6 | 6 | 0 |
+| malformed | 20 | 14 | 6 |
+| flood_same_creator | 12 | 12 | 0 |
+
+| ID | Family | Targeting | Status | Guess | Score | Verdict |
+|---|---|---|---|---|---|---|
+| EV01 | evasion | signal two: typos raise word variety | 200 | unsure | 0.500 | **BROKE** |
+| EV02 | evasion | signal two: broken-up sentences raise length spread | 200 | unsure | 0.506 | **BROKE** |
+| EV03 | evasion | signal two: a pasted quotation changes the shape | 200 | unsure | 0.650 | **BROKE** |
+| EV04 | evasion | signal one: unusual words raise perplexity | 200 | ai | 0.729 | HELD |
+| EV05 | evasion | both signals: heavy human editing pass | 200 | unsure | 0.352 | **BROKE** |
+| EV06 | evasion | signal two: one very long sentence and one very short | 200 | unsure | 0.461 | **BROKE** |
+| EV07 | evasion | signal two: padding with punctuation | 200 | unsure | 0.593 | **BROKE** |
+| EV08 | evasion | signal one: text below the token window | 200 | unsure | 0.500 | **BROKE** |
+| EV09 | evasion | both: AI text with a human opening paragraph bolted on | 200 | ai | 0.684 | HELD |
+| EV10 | evasion | signal two: repeated stanza structure | 200 | ai | 0.917 | HELD |
+| FP01 | false_positive | plain, clear human writing with no flourishes | 200 | ai | 0.712 | **BROKE** |
+| FP02 | false_positive | human writing in a formal register | 200 | ai | 0.854 | **BROKE** |
+| FP03 | false_positive | a non-native English speaker writing carefully | 200 | ai | 0.855 | **BROKE** |
+| FP04 | false_positive | a student essay written to a rubric | 200 | ai | 0.854 | **BROKE** |
+| FP05 | false_positive | technical documentation written by a person | 200 | ai | 0.854 | **BROKE** |
+| FP06 | false_positive | a person imitating a formal template | 200 | ai | 0.821 | **BROKE** |
+| FP07 | false_positive | human writing that repeats a phrase deliberately | 200 | ai | 0.714 | **BROKE** |
+| FP08 | false_positive | very short genuine human submission | 200 | unsure | 0.500 | HELD |
+| PI01 | prompt_injection | instruction to ignore the check | 200 | unsure | 0.558 | HELD |
+| PI02 | prompt_injection | instruction disguised as a system message | 200 | unsure | 0.384 | HELD |
+| PI03 | prompt_injection | instruction wrapped in the writer's voice | 200 | ai | 0.674 | HELD |
+| PI04 | prompt_injection | attempt to make the label text hostile | 200 | unsure | 0.559 | HELD |
+| PI05 | prompt_injection | attempt to inject into the audit log | 200 | unsure | 0.518 | HELD |
+| PI06 | prompt_injection | instruction plus real human text | 200 | ai | 0.687 | HELD † |
+| MF01 | malformed | text is only whitespace | 400 | — | — | HELD |
+| MF02 | malformed | text is a single character | 500 | — | — | **BROKE** |
+| MF03 | malformed | text is control characters | 200 | unsure | 0.500 | HELD |
+| MF04 | malformed | text is only punctuation | 200 | unsure | 0.500 | HELD |
+| MF05 | malformed | text is a very long single word | 200 | ai | 0.999 | **BROKE** |
+| MF06 | malformed | text is emoji only | 200 | ai | 0.999 | **BROKE** |
+| MF07 | malformed | text is right-to-left script | 200 | ai | 0.953 | **BROKE** |
+| MF08 | malformed | text is 60,000 characters | 200 | ai | 0.908 | **BROKE** |
+| RQ01 | malformed | no text field at all | 400 | — | — | HELD |
+| RQ02 | malformed | no creator_id | 200 | unsure | 0.500 | HELD |
+| RQ03 | malformed | text is a number | 400 | — | — | HELD |
+| RQ04 | malformed | text is a list | 400 | — | — | HELD |
+| RQ05 | malformed | text is null | 400 | — | — | HELD |
+| RQ06 | malformed | creator_id is an object | 200 | unsure | 0.500 | HELD ‡ |
+| RQ07 | malformed | body is a JSON array, not an object | 500 | — | — | **BROKE** |
+| RQ08 | malformed | body is unparseable JSON | 400 | — | — | HELD |
+| RQ09 | malformed | body is empty | 400 | — | — | HELD |
+| RQ10 | malformed | body is form-encoded, not JSON | 429 | — | — | HELD * |
+| RQ11 | malformed | body is JSON claiming to be plain text | 429 | — | — | HELD * |
+| RQ12 | malformed | deeply nested JSON | 400 | — | — | HELD |
+| FL01_01 | flood_same_creator | 20 rapid submissions from one creator | 200 | unsure | 0.500 | HELD |
+| FL01_02 | flood_same_creator | 20 rapid submissions from one creator | 200 | unsure | 0.500 | HELD |
+| FL01_03 | flood_same_creator | 20 rapid submissions from one creator | 200 | unsure | 0.500 | HELD |
+| FL01_04 | flood_same_creator | 20 rapid submissions from one creator | 200 | unsure | 0.500 | HELD |
+| FL01_05 | flood_same_creator | 20 rapid submissions from one creator | 200 | unsure | 0.500 | HELD |
+| FL01_06 | flood_same_creator | 20 rapid submissions from one creator | 429 | — | — | HELD |
+| FL01_07 | flood_same_creator | 20 rapid submissions from one creator | 429 | — | — | HELD |
+| FL01_08 | flood_same_creator | 20 rapid submissions from one creator | 429 | — | — | HELD |
+| FL01_09 | flood_same_creator | 20 rapid submissions from one creator | 429 | — | — | HELD |
+| FL01_10 | flood_same_creator | 20 rapid submissions from one creator | 429 | — | — | HELD |
+| FL01_11 | flood_same_creator | 20 rapid submissions from one creator | 429 | — | — | HELD |
+| FL01_12 | flood_same_creator | 20 rapid submissions from one creator | 429 | — | — | HELD |
+
+**Notes on the marks**
+
+- \* **RQ10 and RQ11 were stopped by the rate limiter, not by my validation.**
+  They have no `creator_id`, so they counted against my address, which had
+  already used its 5 a minute on earlier malformed rows. The request was
+  refused, so they're marked HELD, but this run says nothing about how my route
+  handles a form-encoded body.
+- † **PI06: the injection did nothing, but the real human text in it got the
+  AI label (0.687).** It's marked HELD against what the attack was trying to
+  do; the accusation itself is the same failure as the false_positive family.
+- ‡ **RQ06 didn't crash, but the object went into the audit log as the
+  `creator_id`** (`{"id": "x"}`), so the log no longer has one string per
+  creator.
+- **The two crashes left no trace.** MF02 and RQ07 returned a 500 HTML
+  debugger page, and neither has any entry in the audit log: the run sent 56
+  requests and the log gained 54 lines.
+- **Many 0.500 scores are the disagreement cap firing.** EV08, FP08, MF03,
+  MF04, RQ02, RQ06 and every flood row have a signal-two score of about 0.82–1.0
+  and a much lower signal one; the gap is over 0.4, so the combined score is
+  capped at exactly 0.5.
+- The flood family is 12 rows in the set, not the 20 its description says.
 
 **Ten audit log entries from the run**
 
 <!-- Choose entries that show the interesting failures, not the ten easiest. -->
 
-```json
+From `logs/audit.jsonl` (also in `results/audit_attack_run_before.jsonl`), one
+JSON object per line as written:
 
+```json
+{"timestamp": "2026-11-11T04:55:54+00:00", "content_id": "c_b08c96014479", "creator_id": "attacker_FP03", "guess": "ai", "model_score": 0.8051, "style_score": 0.9039, "combined_score": 0.8545, "label": "This reads a lot like writing produced by an AI tool. Our check can be wrong, especially about plain, simple writing. If you wrote this yourself, you can appeal and a person will review it.", "status": "decided"}
+{"timestamp": "2026-11-11T04:55:54+00:00", "content_id": "c_6943119f2217", "creator_id": "attacker_FP02", "guess": "ai", "model_score": 0.7387, "style_score": 0.9697, "combined_score": 0.8542, "label": "This reads a lot like writing produced by an AI tool. Our check can be wrong, especially about plain, simple writing. If you wrote this yourself, you can appeal and a person will review it.", "status": "decided"}
+{"timestamp": "2026-11-11T04:55:55+00:00", "content_id": "c_12da7b47d573", "creator_id": "attacker_MF07", "guess": "ai", "model_score": 0.9064, "style_score": 1.0, "combined_score": 0.9532, "label": "This reads a lot like writing produced by an AI tool. Our check can be wrong, especially about plain, simple writing. If you wrote this yourself, you can appeal and a person will review it.", "status": "decided"}
+{"timestamp": "2026-11-11T04:55:55+00:00", "content_id": "c_58b07bddb428", "creator_id": "attacker_MF08", "guess": "ai", "model_score": 0.9876, "style_score": 0.8289, "combined_score": 0.9083, "label": "This reads a lot like writing produced by an AI tool. Our check can be wrong, especially about plain, simple writing. If you wrote this yourself, you can appeal and a person will review it.", "status": "decided"}
+{"timestamp": "2026-11-11T04:55:53+00:00", "content_id": "c_31b9ad117104", "creator_id": "attacker_EV03", "guess": "unsure", "model_score": 0.6662, "style_score": 0.6333, "combined_score": 0.6498, "label": "We can't tell whether a person or an AI tool wrote this. That isn't an accusation: lots of people's writing lands here. If you wrote it yourself, you can tell us, and a person will take a look.", "status": "decided"}
+{"timestamp": "2026-11-11T04:55:53+00:00", "content_id": "c_9eb29b40ad41", "creator_id": "attacker_EV08", "guess": "unsure", "model_score": 0.2452, "style_score": 0.9379, "combined_score": 0.5, "label": "We can't tell whether a person or an AI tool wrote this. That isn't an accusation: lots of people's writing lands here. If you wrote it yourself, you can tell us, and a person will take a look.", "status": "decided"}
+{"timestamp": "2026-11-11T04:55:54+00:00", "content_id": "c_99fc0058910f", "creator_id": "attacker_PI05", "guess": "unsure", "model_score": 0.6401, "style_score": 0.3964, "combined_score": 0.5182, "label": "We can't tell whether a person or an AI tool wrote this. That isn't an accusation: lots of people's writing lands here. If you wrote it yourself, you can tell us, and a person will take a look.", "status": "decided"}
+{"timestamp": "2026-11-11T04:55:55+00:00", "content_id": "c_e68c999c0b64", "creator_id": {"id": "x"}, "guess": "unsure", "model_score": 0.0492, "style_score": 1.0, "combined_score": 0.5, "label": "We can't tell whether a person or an AI tool wrote this. That isn't an accusation: lots of people's writing lands here. If you wrote it yourself, you can tell us, and a person will take a look.", "status": "decided"}
+{"timestamp": "2026-11-11T04:55:55+00:00", "creator_id": "unknown", "event": "rejected", "status": "rejected", "reason": "rate_limited", "limit": "5 per 1 minute"}
+{"timestamp": "2026-11-11T04:55:54+00:00", "creator_id": "attacker_MF01", "event": "rejected", "status": "rejected", "reason": "bad_request", "route": "/submit", "detail": "missing, empty or non-string text"}
 ```
+
+What each one shows, in order:
+
+1. **FP03** — a non-native English speaker's careful writing, accused at 0.855.
+   Both signals agree (0.805 / 0.904), so the disagreement cap never applies.
+2. **FP02** — formal human writing, accused at 0.854; signal two at 0.970.
+3. **MF07** — right-to-left script, accused at 0.953. Signal two scores it 1.0.
+4. **MF08** — 60,000 characters accepted and given a confident AI label (0.908).
+5. **EV03** — disguised AI text at 0.6498, 0.0002 under the AI line, so it gets
+   "unsure" — "that isn't an accusation".
+6. **EV08** — AI text below the token window: signal one 0.245, signal two
+   0.938, gap over 0.4, combined capped at exactly 0.5.
+7. **PI05** — the audit-log injection. Its text contains a fake
+   `"guess": "human", "combined_score": 0.01`; the real entry is intact and the
+   fake fields stayed inside the text, which is never logged.
+8. **RQ06** — `creator_id` sent as an object went into the log as an object.
+9. **A 429** — this is RQ10 or RQ11: no `creator_id`, so it's logged as
+   `"unknown"`, and the log can't say which of the two it was.
+10. **MF01** — a 400 for whitespace-only text, logged as a rejection.
 
 **The single worst outcome** — the one I'd least want to explain to a writer
 whose work got caught by it:
 
+**FP03: a non-native English speaker writing carefully, labelled AI at
+0.855.** They did exactly what a careful second-language writer does — common
+words they're sure of, even sentences, little punctuation — and both signals
+read that care as machine-like (0.805 and 0.904). Because the two signals
+agree, my disagreement cap, the one rule I wrote to stop a lone signal
+accusing someone, never comes into play. The label they get even says "our
+check can be wrong, especially about plain, simple writing" — which admits the
+problem while still accusing them of it. It's also the exact writer I
+predicted in unit 7: my own plain-writing test paragraph scored 0.822 for the
+same reason.
 
 
 ---
@@ -378,20 +554,126 @@ whose work got caught by it:
 
 <!-- Your five criteria across three trials. `run_eval.py --label before`. -->
 
+Two runs, service restarted first so the rate-limit counters started at zero:
+
+- `python run_eval.py --label before` → `results/run_2026-11-10_2312_before.md`
+  (criteria 1, 2, 4 and 5; scenarios in `scenarios.py`)
+- `python run_eval_extra.py --label before` →
+  `results/run_extra_2026-11-10_2312_before.md` (criterion 3, the non-JSON
+  case of criterion 4, the code half of criterion 2, and timing plus the log
+  check for criterion 5). `run_eval.py` can only POST JSON bodies to
+  `/submit`, so I extended the tooling with this script rather than testing by
+  hand.
+
+All three trials of every criterion came back identical — both signals give
+the same score for the same text, so there was no trial-to-trial instability.
+
 | Criterion | Target | Run 1 | Run 2 | Run 3 | Verdict |
 |---|---|---|---|---|---|
-| 1.  |  |  |  |  |  |
-| 2.  |  |  |  |  |  |
-| 3.  |  |  |  |  |  |
-| 4.  |  |  |  |  |  |
-| 5.  |  |  |  |  |  |
+| 1. Score spread | clearly_ai ≥ 0.30 above clearly_human every trial; clearly_human never AI | 0.7286 vs 0.2282 (gap 0.5004); human | 0.7286 vs 0.2282 (gap 0.5004); human | 0.7286 vs 0.2282 (gap 0.5004); human |  |
+| 2. Label coverage | no gaps; 0.51 ≠ 0.95; each label ≥ 2 of 9, every trial | ai 5 · human 2 · unsure 2; ranges 0–0.35 / 0.35–0.65 / 0.65–1; 0.51 unsure, 0.95 ai | same | same |  |
+| 3. Appeal path | 5/5 appeals 200 + `under_review` entry after decision, decision unchanged; unknown id → 404, no appeal entry | 5/5 200, all after decision, decision still `decided`; unknown 404, 0 appeal entries | same | same |  |
+| 4. Bad input | 5 malformed requests all 400 `bad_request`, 0 × 500, `/ping` still up | 5/5 400 (non-JSON body: `bad_request`); `/ping` 200 | same | same |  |
+| 5. Enormous text | 100,000 chars → 413 `too_large` within 30 s + rejection logged; 20,000 accepted | 100k: **200, ai 0.9986**, 0.32 s, logged as a decision; 20k: 200 | 100k: **200**, 0.29 s; 20k: 200 | 100k: **200**, 0.35 s; 20k: 200 |  |
 
-**Real output from one trial**, pasted as text, naming the file and function
-that produced it:
+**Real output from one trial** (trial 1 of each). The JSON is as the tools
+wrote it, except that `label` is removed and `sent` is shortened to keep it
+readable.
+
+*Criterion 1 — `run_eval.py::main`, scenario "score spread":*
 
 ```json
-
+[
+  {"status": 200, "guess": "ai", "confidence": 0.7286, "model_score": 0.7544, "style_score": 0.7028,
+   "sent": "The importance of effective time management cannot be overst"},
+  {"status": 200, "guess": "human", "confidence": 0.2282, "model_score": 0.4445, "style_score": 0.0119,
+   "sent": "I didn't sleep. Not properly, anyway — I lay there listening"}
+]
 ```
+
+*Criterion 2 — `run_eval.py::main`, scenario "label coverage":*
+
+```json
+[
+  {"status": 200, "guess": "ai",     "confidence": 0.7286, "model_score": 0.7544, "style_score": 0.7028, "sent": "The importance of effective time management cannot be overst"},
+  {"status": 200, "guess": "human",  "confidence": 0.2282, "model_score": 0.4445, "style_score": 0.0119, "sent": "I didn't sleep. Not properly, anyway — I lay there listening"},
+  {"status": 200, "guess": "unsure", "confidence": 0.436,  "model_score": 0.3489, "style_score": 0.523,  "sent": "Time management matters more than people admit, especially n"},
+  {"status": 200, "guess": "ai",     "confidence": 0.8223, "model_score": 0.8229, "style_score": 0.8218, "sent": "My job is at a store. I work there five days a week. I like "},
+  {"status": 200, "guess": "ai",     "confidence": 0.6698, "model_score": 0.6998, "style_score": 0.6397, "sent": "Good time management really matters in today's fast-paced wo"},
+  {"status": 200, "guess": "ai",     "confidence": 0.676,  "model_score": 0.8151, "style_score": 0.5369, "sent": "Our new water bottle combines sleek design with everyday pra"},
+  {"status": 200, "guess": "human",  "confidence": 0.2038, "model_score": 0.2138, "style_score": 0.1938, "sent": "ok so the dishwasher is doing the thing again — the beeping,"},
+  {"status": 200, "guess": "ai",     "confidence": 0.784,  "model_score": 0.9269, "style_score": 0.6412, "sent": "Climate change is one of the most pressing challenges facing"},
+  {"status": 200, "guess": "unsure", "confidence": 0.5839, "model_score": 0.4506, "style_score": 0.7172, "sent": "My grandfather kept bees for forty years and never once wore"}
+]
+```
+
+and the code half, `run_eval_extra.py::main`:
+
+```json
+{
+  "label_ranges": [["high-confidence human", "0.00 – 0.35"], ["unsure", "0.35 – 0.65"], ["high-confidence AI", "0.65 – 1.00"]],
+  "label_at_0.51": "unsure",
+  "label_at_0.95": "ai"
+}
+```
+
+*Criterion 3 — `run_eval_extra.py::appeal_trial`, the first of five appeals
+and the unknown id:*
+
+```json
+{
+  "submit_status": 200,
+  "content_id": "c_f74310247ba0",
+  "appeal_status": 200,
+  "appeal_response": {"content_id": "c_f74310247ba0", "original_guess": "unsure", "status": "under_review"},
+  "log_entries_for_id": 2,
+  "appeal_entry_after_decision": true,
+  "appeal_entry_status": "under_review",
+  "decision_status_unchanged": "decided"
+}
+{
+  "content_id": "c_eval_missing_t1",
+  "status": 404,
+  "response": {"error": "not_found", "message": "No submission with content_id \"c_eval_missing_t1\"."},
+  "new_log_entries": [
+    {"creator_id": "unknown", "detail": "unknown content_id", "event": "rejected", "reason": "not_found",
+     "requested_content_id": "c_eval_missing_t1", "route": "/appeal", "status": "rejected",
+     "timestamp": "2026-11-11T05:12:45+00:00"}
+  ],
+  "appeal_entries_written": 0
+}
+```
+
+*Criterion 4 — `run_eval.py::main`, scenario "bad input", plus
+`run_eval_extra.py::non_json_trial`:*
+
+```json
+[
+  {"status": 400, "guess": null, "confidence": null, "model_score": null, "style_score": null, "sent": "{\"creator_id\": \"eval_bad_missing\"}"},
+  {"status": 400, "guess": null, "confidence": null, "model_score": null, "style_score": null, "sent": "(empty text)"},
+  {"status": 400, "guess": null, "confidence": null, "model_score": null, "style_score": null, "sent": "   "},
+  {"status": 400, "guess": null, "confidence": null, "model_score": null, "style_score": null, "sent": "{\"text\": 12345, \"creator_id\": \"eval_bad_number\"}"}
+]
+{"status": 400, "response": {"error": "bad_request", "message": "Send JSON with a non-empty \"text\"."}, "ping_after": 200}
+```
+
+`run_eval.py` records the status but not the `error` field. The `bad_request`
+reason for the four JSON cases is in the audit log's rejection entries.
+
+*Criterion 5 — `run_eval.py::main`, scenario "enormous text", plus
+`run_eval_extra.py::huge_trial`:*
+
+```json
+[
+  {"status": 200, "guess": "ai", "confidence": 0.9986, "model_score": 0.9972, "style_score": 1.0, "sent": "The quick brown fox jumps over the lazy dog. The quick brown"},
+  {"status": 200, "guess": "ai", "confidence": 0.9986, "model_score": 0.9972, "style_score": 1.0, "sent": "The quick brown fox jumps over the lazy dog. The quick brown"}
+]
+{"chars": 100035, "status": 200, "seconds": 0.32, "error": null, "guess": "ai",
+ "log_entries_for_creator": [{"event": null, "reason": null, "guess": "ai", "status": "decided"}]}
+```
+
+The first is 100,035 characters, the second 20,025; both get the same score,
+because signal one reads only the first 400 tokens of either.
 
 **Diagnoses**
 

@@ -153,7 +153,7 @@ def health():
 # ── YOU BUILD THIS ────────────────────────────────────────────────────────────
 
 @app.post("/submit")
-# @limiter.limit(f"{config.RATE_LIMIT_PER_MINUTE}/minute;{config.RATE_LIMIT_PER_DAY}/day")
+@limiter.limit(f"{config.RATE_LIMIT_PER_MINUTE}/minute;{config.RATE_LIMIT_PER_DAY}/day")
 def submit():
     """
     Take a piece of text, decide about it, log the decision, answer.
@@ -208,6 +208,9 @@ def submit():
     # step 2 - JSON goes in : pull text and creator_id out of the body
     # check BEFORE calling the detector, so bad input gets a 400, not a 500
     if not isinstance(text, str) or not text.strip():
+        # a refused request still leaves a trace in the audit log
+        audit.log_rejection(creator_id=creator_id, reason="bad_request", route="/submit",
+                            detail="missing, empty or non-string text")
         return jsonify({"error": "bad_request", "message": "Send JSON with a non-empty \"text\"."}), 400
 
     # step 3 - one real signal that we first tested from the terminal
@@ -273,16 +276,27 @@ def appeal():
     content_id = payload.get("content_id")
     reasoning = payload.get("reasoning")
 
+    # refusals are logged under requested_content_id, NOT content_id, so
+    # audit.entries_for() never mistakes a refusal for a real submission
+    def refuse(reason, detail, code, message):
+        audit.log_rejection(creator_id="unknown", reason=reason, route="/appeal",
+                            detail=detail, requested_content_id=content_id)
+        return jsonify({"error": reason, "message": message}), code
+
     # both fields are required, same shape as /submit's bad-input answer
     if not isinstance(content_id, str) or not content_id.strip():
-        return jsonify({"error": "bad_request", "message": "Send JSON with a non-empty \"content_id\"."}), 400
+        return refuse("bad_request", "missing or empty content_id", 400,
+                      "Send JSON with a non-empty \"content_id\".")
     if not isinstance(reasoning, str) or not reasoning.strip():
-        return jsonify({"error": "bad_request", "message": "Send JSON with a non-empty \"reasoning\"."}), 400
+        return refuse("bad_request", "missing or empty reasoning", 400,
+                      "Send JSON with a non-empty \"reasoning\".")
 
-    # step 1 - the content_id has to exist. An unknown id writes nothing
+    # step 1 - the content_id has to exist. An unknown id writes no appeal,
+    # only a rejection entry
     entries = audit.entries_for(content_id)
     if not entries:
-        return jsonify({"error": "not_found", "message": f"No submission with content_id \"{content_id}\"."}), 404
+        return refuse("not_found", "unknown content_id", 404,
+                      f"No submission with content_id \"{content_id}\".")
 
     # step 2 - record the appeal next to the original decision (append-only,
     # the decision itself is left as it was). The creator comes from that decision
