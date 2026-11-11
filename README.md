@@ -324,6 +324,43 @@ access to the repo.
   that `python3` on my machine means Anaconda's 3.9, so I activate `.venv`
   before running anything and check `python --version` says 3.12.
 
+### Unit 8
+
+**Moment 3 — diagnosing the attack run (Milestone 4)**
+
+- *What I asked for:* Verdicts for my five criteria, then a stage and
+  mechanism for every miss and broken attack.
+- *What came back:* Instead of guessing from the attack names, Claude re-ran
+  signal two's two parts on each broken attack's text. That overturned two of
+  the attack set's own "targeting" labels. EV01 (typos) was aimed at signal
+  two, but my signal two scored it *more* AI (0.89); the typos fooled signal
+  one (0.16), and my disagreement cap then forced 0.5. It also showed that
+  six of the seven false positives max out my punctuation measure, and that
+  Arabic and emoji have zero "words" to signal two, so its edge-case defaults
+  call them fully AI. It grouped the 21 failures into six patterns, 13 of them
+  in signal two.
+- *What I changed:* I decided not to implement an improvement this unit, and
+  wrote up what I would change instead.
+
+**Moment 4 — testing the appeal path (Milestone 3)**
+
+- *What I asked for:* Run all five criteria three times.
+- *What came back:* Claude pointed out that `run_eval.py` can only POST JSON
+  to `/submit`, so it can't test an appeal (which needs a `content_id` from a
+  submission first) or a body that isn't JSON. It wrote `run_eval_extra.py` to
+  cover those, plus the timing and log checks for criterion 5. It also gave
+  each bad-input body its own `creator_id`, so the rate limiter wouldn't turn
+  my 400 tests into 429s the way it did for RQ10 and RQ11 in the attack run.
+- *What I changed:* Nothing in the code; I used its results as written.
+
+**What else Claude did this unit, so the record is complete:** it chose the
+rate limits (5 a minute, 50 a day) and wrote their reasoning; it made
+`/submit` and `/appeal` log their refusals, storing the requested id under
+`requested_content_id` so a refusal can't be mistaken for a real submission;
+it wrote the HELD/BROKE marking rules and marked all 56 attacks; it wrote the
+six extra label-coverage inputs in `scenarios.py`; and it drafted the
+verdicts, the diagnoses, What's Still Broken and the production trade above.
+
 <!-- ═══════════════════════ UNIT 8 — THE TEST ═══════════════════════ -->
 
 ---
@@ -852,22 +889,28 @@ one-character text or a JSON array.
 
 ## The Improvement
 
-**What I changed:**
+**What I changed:** Nothing. I chose not to implement an improvement this
+unit, so the pipeline is exactly as it was for the "before" runs. The only
+changes this unit are the rate limiter and the audit log (Milestone 1).
 
-**Which diagnosis pointed at it:**
+**Which diagnosis pointed at it:** None was applied. The one I'd have made is
+in What's Still Broken below.
 
 ### Attack Run — After
 
 <!-- Same format. `run_attacks.py --label after` -->
 
-
+Not run. With no change made, an "after" run would repeat the "before" run.
+Both signals give the same score for the same text, and every trial in
+Milestone 3 came back identical.
 
 **Did it help, and how do I know:**
 
 <!-- Widening the unsure band usually fixes one problem and creates another.
      Reporting that trade honestly is worth full credit. -->
 
-
+There was no change to measure, so there's no evidence either way. Every
+result in Attack Run — Before and Run Log and Verdicts still stands.
 
 ---
 
@@ -876,13 +919,34 @@ one-character text or a JSON array.
 <!-- For each attack still getting through and each criterion still missed:
      what you'd do, and why you stopped. -->
 
+Everything that broke is still broken: **20 attacks and 1 criterion**. I
+stopped after diagnosing, without making a change. Grouped by the patterns in
+Diagnoses:
 
+| Still broken | What I'd do | Cost of doing it |
+|---|---|---|
+| **A.** FP01–FP07 — plain and formal human writing accused (0.71–0.86) | Move signal two's punctuation AI anchor well below 0.02 per word, or drop punctuation density, so "few commas" stops counting as the strongest AI evidence. Separately, cap the combined score below the AI line when the text is plain *and* both signals rely on predictability and evenness — the one kind of agreement I know is unreliable. | Clearly-AI text also has few commas (the sample is 0.054), so some AI text would slide from "ai" to "unsure". |
+| **B.** MF05, MF06, MF07 — single long word, emoji, Arabic scored ~1.0 AI | Make signal two return "can't measure" instead of fully AI when it finds fewer than ~20 words or fewer than 2 sentences, and score that case as unsure. Match letters in any script, not just a–z. | Very short real submissions would always be unsure — which is already what happened to FP08, so little is lost. |
+| **C.** EV02, EV06, EV07 — sentence splitting, one outlier sentence, punctuation padding | Use a robust spread measure (e.g. interquartile range instead of standard deviation, so one outlier can't swing it) and cap how far punctuation alone can move signal two. | Real human writing with genuinely uneven sentences gets less credit for it; slightly more false positives. |
+| **D.** EV01, EV08 — typos and very short text push signal one low; cap forces 0.5 | Leave the cap. It's doing what I designed it to do: one signal alone doesn't get to decide. Let both through to unsure and rely on the appeal path. | Typo'd AI text stays unaccused. I'd accept that. |
+| **E.** EV03 (0.6498), EV05 (0.352) | Leave them. EV03 is a threshold edge, and moving the line would just move the edge; EV05 may honestly be mostly human after heavy editing. | — |
+| **F.** MF02, RQ07 — two crashes with no log entry | In `/submit`: reject any body that isn't a JSON object with 400, and catch the detector's "too short" error and return 400 — both logged with `audit.log_rejection`. | None I can see. This is the change I'd make first: it's mechanical, it can't hurt any other result, and right now two attacks are invisible in my audit log. |
+| **F.** MF08 and **criterion 5 (MISSED)** — 60,000 and 100,000 characters accepted, scored on the first 400 tokens | Add the length limit criterion 5 already specifies: over 20,000 characters → 413 `too_large`, logged as a rejection. | Long genuine pieces have to be submitted in parts. |
+
+**Why I stopped:** I chose to end the unit at the diagnosis and not make the
+one allowed change.
 
 **The trade I'd make if this ran for real:**
 
 <!-- Two sentences. Fewer wrong accusations means more AI text getting through.
      Say which way you'd go and WHO PAYS FOR IT. -->
 
+I'd go toward fewer wrong accusations: widen what counts as unsure and fix
+signal two's plain-writing bias, even though that lets more AI text through
+as "unsure" — as seven of my ten evasion attacks already got through. The cost
+falls on the site and on honest writers whose work sits next to undetected AI
+text, which is a smaller harm than what FP03 shows: a careful second-language
+writer accused with 0.855 confidence and left to argue their way out.
 
 
 <!-- ═════════════════════════════════════════════════════════════════════
