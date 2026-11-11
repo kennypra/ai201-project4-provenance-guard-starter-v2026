@@ -728,6 +728,124 @@ because signal one reads only the first 400 tokens of either.
 
      Look for a pattern. Five failures on one signal is one problem, not five. -->
 
+21 failures in all: 20 BROKE attacks and 1 MISSED criterion. To find the
+mechanisms I re-ran signal two's two parts on each broken attack's text after
+the run. Sentence spread and punctuation density are each mapped to 0–1, with
+1.0 meaning fully AI (`config.py` anchors). The 21 come down to **six
+problems**.
+
+| Failure | Pattern | Stage |
+|---|---|---|
+| FP01–FP07 (7) | A. Plain and formal human writing — both signals wrong together | signal one + signal two |
+| MF05, MF06, MF07 (3) | B. Signal two scores "nothing to measure" as fully AI | signal two (+ route) |
+| EV02, EV06, EV07 (3) | C. Signal two's two measures are cheap to game | signal two |
+| EV01, EV08 (2) | D. Signal one reads it as human, the cap forces 0.5 | signal one + combining rule |
+| EV03, EV05 (2) | E. Lands just inside the unsure band | label mapping (EV05: both signals) |
+| MF02, RQ07, MF08, criterion 5 (4) | F. The route lets unchecked input through to the signals | the route |
+
+**A. Plain and formal human writing — 7 false positives (FP01–FP07).**
+Stage: signal one and signal two together; the combining rule can't help.
+Every one scored between 0.71 and 0.86. Signal one was 0.62–0.88, because
+plain and formal writing uses common words in ordinary order, which is what
+gpt2 predicts best. Signal two was 0.55–0.97, and the reason is mostly my
+punctuation anchor: six of the seven use fewer than one comma, dash, colon or
+semicolon per 50 words (0.000–0.019 per word). My AI anchor is 0.02, so their
+punctuation part is fully AI (1.0). Formal pieces also have even sentences
+(spread 0.24–0.37 against an AI anchor of 0.2), so the spread part is
+0.79–0.95 AI. Because the two signals agree, the gap never exceeds 0.4 and the
+disagreement cap never applies. FP07 differs slightly: its deliberate
+repetition ("It rained on Monday. It rained on Tuesday…") made signal one
+0.88, because a repeated phrase is the most predictable text there is.
+Mechanism: **both signals reward plain, even, lightly punctuated writing, and
+careful human writers produce exactly that**. My punctuation anchor treats
+"almost no commas" as the strongest AI evidence available. PI06's human text
+(0.687) is the same failure.
+
+**B. Signal two scores "nothing to measure" as fully AI — MF05, MF06, MF07.**
+Stage: signal two, with the route letting it through.
+A single long word, emoji only, and Arabic text all got signal two = 1.0 and
+the AI label (0.95–0.999). `stylometry.words()` only matches `[a-z0-9']`, so
+emoji and Arabic have **zero words**. With one sentence, spread can't be
+measured and returns 0.0; with no words, punctuation density returns 0.0. Both
+of those edge-case defaults sit at the AI end of my scale, so "I couldn't
+measure anything" becomes "certainly AI". Signal one agreed (0.91–0.998)
+because gpt2 is an English model and repeated byte patterns are predictable to
+it. MF07 matters most: it's real writing in Arabic, and the system accused it
+with near certainty using a measurement that never saw a single word of it.
+
+**C. Signal two's measures are cheap to game — EV02, EV06, EV07.**
+Stage: signal two.
+- **EV02** broke AI text into more sentences of varied length: spread went to
+  0.85, so the spread part fell to 0.19, signal two to 0.42, and the combined
+  score to 0.506 (unsure).
+- **EV06** added one very long and one very short sentence: spread 1.19, which
+  is past my human anchor, so the spread part is 0.0, signal two 0.35, and the
+  combined score 0.461.
+- **EV07** padded with punctuation and ended up as a single "sentence": the
+  spread part went to fully AI (1.0), but punctuation density of 0.227 drove
+  the punctuation part to 0.0, so signal two was 0.60 and the combined score
+  0.593.
+
+Mechanism: **spread and punctuation count shape, not meaning**. Spread with
+6–13 sentences moves a lot from one or two outliers. Each measure is a single
+weighted term (0.6 and 0.4), so maxing one out moves signal two by up to that
+much. Signal one alone (0.57–0.59) would have put all three in unsure anyway.
+That is pattern E's band: they never got close to the AI line.
+
+**D. Signal one reads it as human, and the cap forces exactly 0.5 — EV01,
+EV08.** Stage: signal one, then the combining rule.
+- **EV01 (typos)** was meant to fool signal two through word variety, but my
+  signal two doesn't score word variety, and it read the text as *more* AI
+  (0.89). The typos fooled **signal one** instead: misspelled words are rare
+  tokens to gpt2, so it scored 0.16.
+- **EV08 (two sentences, 10 words)** scored 0.245 on signal one, because
+  perplexity over 10 words is noisy, and 0.94 on signal two, because short text
+  has little spread and no punctuation.
+
+In both, the gap is over 0.4, so the combined score is capped at exactly 0.5:
+unsure. Mechanism: **the cap I wrote to stop one signal accusing a writer also
+stops one signal accusing AI text**. Any change that pushes signal one low,
+like typos or brevity, is enough to keep the AI label off. The same cap
+produced the many 0.500 scores elsewhere in the run.
+
+**E. Just inside the unsure band — EV03, EV05.** Stage: the label mapping
+(EV05: both signals).
+- **EV03** scored 0.6498, 0.0002 under my 0.65 AI line. The pasted quotation
+  nudged both signals a little (0.666 and 0.633), because quotation marks
+  count as punctuation and the quote changed sentence lengths. The label
+  mapping uses a hard cutoff, so 0.6498 and 0.6502 get opposite labels. This
+  is a threshold-edge outcome, not a strong evasion.
+- **EV05**, a heavy human editing pass, moved both signals honestly (0.32 and
+  0.38) to a combined 0.352, just above my 0.35 human line. After that much
+  editing the text arguably *is* substantially human-written. I marked it
+  BROKE by my rule, but it's the failure I'm least sure is a failure.
+
+**F. The route lets unchecked input through — MF02, RQ07, MF08, and criterion
+5.** Stage: the route (`app.py::submit`).
+- **MF02 (`"a"`)** passed my non-empty check. `detector.perplexity` then
+  raised `ValueError: Text is too short to score` (it needs 3+ tokens), and
+  nothing catches it, so Flask returned a 500 HTML debugger page.
+- **RQ07 (a JSON array body)** made `request.get_json()` return a list, and
+  `payload.get("text")` raised `AttributeError: 'list' object has no attribute
+  'get'` on the route's second line.
+
+  Both crashes happen **before** `audit.log_decision` runs, so neither left an
+  entry: 56 requests, 54 log lines. To my audit log they're invisible.
+- **MF08 (60,000 characters)** and **criterion 5 (100,000 characters)** were
+  accepted because `/submit` has no length check. Signal one read only the
+  first 400 tokens and the response gave a confident AI label (0.908 and
+  0.9986) as if it had judged the whole thing. The 413 I specified in criterion
+  5 was never built.
+
+**What the patterns say.** Most of the damage traces to **signal two** —
+patterns A, B and C, 13 of 21 — and especially to two choices in it: the
+punctuation anchor that calls lightly punctuated writing fully AI, and
+edge-case defaults that point to AI when there's nothing to measure. The worst
+outcomes (FP03, MF07) are both real writers accused. Pattern F is separate,
+smaller and mechanical: the route trusts its input too much. Criterion 4 was
+too narrow to catch it — it tested the malformed bodies I thought of, not a
+one-character text or a JSON array.
+
 
 
 ---
